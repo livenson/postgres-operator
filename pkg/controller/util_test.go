@@ -8,6 +8,7 @@ import (
 	b64 "encoding/base64"
 
 	"github.com/zalando/postgres-operator/pkg/spec"
+	"github.com/zalando/postgres-operator/pkg/util/config"
 	"github.com/zalando/postgres-operator/pkg/util/k8sutil"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -82,19 +83,21 @@ func TestClusterWorkerID(t *testing.T) {
 
 func TestGetInfrastructureRoles(t *testing.T) {
 	var testTable = []struct {
-		secretName    spec.NamespacedName
-		expectedRoles map[string]spec.PgUser
-		expectedError error
+		secretName     spec.NamespacedName
+		expectedRoles  map[string]spec.PgUser
+		expectedErrors []error
 	}{
 		{
+			// empty secret name
 			spec.NamespacedName{},
 			nil,
 			nil,
 		},
 		{
+			// secret does not exist
 			spec.NamespacedName{Namespace: v1.NamespaceDefault, Name: "null"},
-			nil,
-			fmt.Errorf(`could not get infrastructure roles secret: NotFound`),
+			map[string]spec.PgUser{},
+			[]error{fmt.Errorf(`could not get infrastructure roles secret: NotFound`)},
 		},
 		{
 			spec.NamespacedName{Namespace: v1.NamespaceDefault, Name: testInfrastructureRolesSecretName},
@@ -116,15 +119,37 @@ func TestGetInfrastructureRoles(t *testing.T) {
 		},
 	}
 	for _, test := range testTable {
-		roles, err := utilTestController.getInfrastructureRoles(&test.secretName)
-		if err != test.expectedError {
-			if err != nil && test.expectedError != nil && err.Error() == test.expectedError.Error() {
-				continue
-			}
-			t.Errorf("expected error '%v' does not match the actual error '%v'", test.expectedError, err)
+		roles, errors := utilTestController.getInfrastructureRoles([]*config.InfrastructureRole{
+			&config.InfrastructureRole{
+				Secret:   test.secretName,
+				Name:     "user",
+				Password: "password",
+				Role:     "inrole",
+				Template: true,
+			},
+		})
+
+		if len(errors) != len(test.expectedErrors) {
+			t.Errorf("expected error '%v' does not match the actual error '%v'",
+				test.expectedErrors, errors)
 		}
+
+		for idx := range errors {
+			err := errors[idx]
+			expectedErr := test.expectedErrors[idx]
+
+			if err != expectedErr {
+				if err != nil && expectedErr != nil && err.Error() == expectedErr.Error() {
+					continue
+				}
+				t.Errorf("expected error '%v' does not match the actual error '%v'",
+					expectedErr, err)
+			}
+		}
+
 		if !reflect.DeepEqual(roles, test.expectedRoles) {
-			t.Errorf("expected roles output %v does not match the actual %v", test.expectedRoles, roles)
+			t.Errorf("expected roles output %#v does not match the actual %#v",
+				test.expectedRoles, roles)
 		}
 	}
 }
